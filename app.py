@@ -1,76 +1,104 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
-from ultralytics import YOLO
-import av
-import cv2
-from PIL import Image
+import os
+
+# Pengaturan Lingkungan (harus di paling atas sebelum import cv2/ultralytics)
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+
+try:
+    import cv2
+    import av
+    import numpy as np
+    from PIL import Image
+    from ultralytics import YOLO
+    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
+except ImportError as e:
+    st.error(f"Gagal memuat library: {e}")
+    st.info("Pastikan requirements.txt sudah sesuai dan tunggu proses instalasi selesai.")
+    st.stop()
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="Deteksi Minuman Real-time", layout="wide")
-
-st.title("🥤 Aplikasi Deteksi Minuman Kemasan")
-st.write("Mendeteksi Botol, Kaleng, dan Kotak secara Real-time.")
+st.set_page_config(page_title="Deteksi Minuman AI", layout="centered")
 
 # --- LOAD MODEL ---
 @st.cache_resource
 def load_model():
-    # Pastikan file best.pt sudah diupload ke GitHub
+    # Pastikan file best.pt ada di root repository GitHub Anda
     return YOLO('best.pt')
 
 try:
     model = load_model()
 except Exception as e:
-    st.error(f"Gagal memuat model: {e}")
+    st.error(f"File model 'best.pt' tidak ditemukan! Pastikan sudah diunggah ke GitHub. Error: {e}")
     st.stop()
 
-# --- LOGIKA VIDEO PROCESSING (REAL-TIME) ---
-class VideoProcessor(VideoProcessorBase):
+# --- HEADER ---
+st.title("🥤 Deteksi Kemasan Minuman")
+st.write("Aplikasi deteksi otomatis untuk Botol, Kaleng, dan Kotak.")
+
+# --- LOGIKA VIDEO PROCESSING (WEB RTC) ---
+class YOLOVideoProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.model = model
+
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
 
-        # Proses deteksi frame demi frame
-        # conf=0.4 (hanya tampilkan jika tingkat keyakinan di atas 40%)
-        results = model.predict(img, conf=0.4, verbose=False)
+        # Inisialisasi deteksi YOLO
+        # imgsz=320 untuk mempercepat proses di CPU Cloud
+        results = self.model.predict(img, conf=0.4, imgsz=320, verbose=False)
         
-        # Gambar bounding box hasil prediksi ke frame
+        # Gambar hasil deteksi ke frame
         annotated_frame = results[0].plot()
 
         return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
 
-# --- MENU UTAMA ---
-tabs = st.tabs(["🎥 Live Kamera", "📂 Upload Gambar"])
+# --- NAVIGASI TAB ---
+tab1, tab2 = st.tabs(["🎥 Kamera Real-time", "📂 Upload Gambar"])
 
-with tabs[0]:
-    st.subheader("Live Streaming Detection")
-    st.info("Klik 'Start' di bawah untuk menyalakan kamera.")
+with tab1:
+    st.subheader("Live Detection")
+    st.info("Klik 'Start' untuk mengaktifkan kamera.")
     
-    # Menjalankan WebRTC Streamer
+    # Konfigurasi Server STUN (Penting agar kamera jalan di Cloud)
+    RTC_CONFIG = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+
     webrtc_streamer(
         key="yolo-detection",
-        video_processor_factory=VideoProcessor,
-        rtc_configuration={
-            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-        },
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIG,
+        video_processor_factory=YOLOVideoProcessor,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
 
-with tabs[1]:
-    st.subheader("Deteksi via Upload")
-    uploaded_file = st.file_uploader("Upload foto minuman...", type=['jpg', 'jpeg', 'png'])
+with tab2:
+    st.subheader("Manual Upload")
+    uploaded_file = st.file_uploader("Pilih gambar...", type=['jpg', 'jpeg', 'png'])
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption='Gambar Asli', width=400)
         
         # Jalankan Prediksi
-        results = model.predict(image)
-        res_plotted = results[0].plot()
-        
-        st.image(res_plotted, caption='Hasil Deteksi', use_container_width=True)
-        
-        # Tampilkan list objek yang ditemukan
-        for box in results[0].boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-            st.write(f"- **{model.names[cls_id]}** (Confidence: {conf:.2f})")
+        with st.spinner('Menganalisis gambar...'):
+            results = model.predict(image, conf=0.4)
+            res_plotted = results[0].plot()
+            
+            # Tampilkan Gambar
+            st.image(res_plotted, caption='Hasil Deteksi', use_column_width=True)
+            
+            # Tampilkan Hasil Detail
+            boxes = results[0].boxes
+            if len(boxes) > 0:
+                st.write(f"Ditemukan {len(boxes)} objek:")
+                for box in boxes:
+                    label = model.names[int(box.cls[0])]
+                    prob = float(box.conf[0])
+                    st.write(f"- **{label}** (Keyakinan: {prob:.2f})")
+            else:
+                st.warning("Tidak ada objek yang terdeteksi.")
+
+# --- FOOTER ---
+st.markdown("---")
+st.caption("Aplikasi berbasis YOLOv8 & Streamlit")
