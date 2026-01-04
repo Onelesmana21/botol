@@ -1,35 +1,59 @@
 import streamlit as st
 from ultralytics import YOLO
-import PIL.Image
+from PIL import Image
 import numpy as np
 import cv2
 
-st.title("Deteksi Minuman Kemasan 🥤")
-st.sidebar.title("Pengaturan")
+# Konfigurasi Halaman
+st.set_page_config(page_title="Deteksi Minuman", page_icon="🥤")
 
-# Load Model (Gunakan hasil export tadi)
-model_path = 'best.pt' # Ganti dengan model hasil trainingmu
+# Judul Utama
+st.title("AI Deteksi Kemasan Minuman 🥤")
+st.write("Aplikasi ini mendeteksi Botol, Kaleng, dan Kotak menggunakan YOLOv8.")
+
+# 1. Load Model (Gunakan Cache agar tidak lemot)
+@st.cache_resource
+def load_model():
+    # Pastikan file 'best.pt' ada di folder yang sama di GitHub
+    model = YOLO('best.pt') 
+    return model
+
 try:
-    model = YOLO(model_path)
-except:
-    st.error("Model tidak ditemukan. Silakan training dulu di Notebook.")
+    model = load_model()
+except Exception as e:
+    st.error(f"Gagal memuat model 'best.pt'. Pastikan file sudah di-upload ke GitHub. Error: {e}")
+    st.stop()
 
-mode = st.sidebar.selectbox("Pilih Mode", ["Upload File", "Real-time Kamera"])
+# 2. Sidebar Navigasi
+st.sidebar.title("Menu Utama")
+mode = st.sidebar.selectbox("Pilih Metode Deteksi:", ["Upload Gambar", "Gunakan Kamera"])
 
-if mode == "Upload File":
-    img_file = st.file_uploader("Upload Gambar Minuman (Botol/Kaleng/Kotak)", type=['jpg', 'png', 'jpeg'])
-    if img_file:
-        img = PIL.Image.open(img_file)
-        results = model.predict(img)
+# 3. Logika Deteksi
+if mode == "Upload Gambar":
+    img_file = st.file_uploader("Pilih file gambar (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
+    if img_file is not None:
+        image = Image.open(img_file)
         
-        # Gambar bounding box
-        res_plotted = results[0].plot()
-        st.image(res_plotted, caption="Hasil Deteksi", use_column_width=True)
+        # Jalankan Prediksi
+        with st.spinner('Menganalisis...'):
+            results = model.predict(image, conf=0.25)
+            res_plotted = results[0].plot() # Hasil dengan bounding box
+            
+        st.image(res_plotted, caption="Hasil Deteksi", use_container_width=True)
+        
+        # Tampilkan Detail Objek
+        for box in results[0].boxes:
+            conf = box.conf[0]
+            cls = int(box.cls[0])
+            label = model.names[cls]
+            st.write(f"✅ Terdeteksi: **{label}** (Tingkat Keyakinan: {conf:.2f})")
 
-elif mode == "Real-time Kamera":
-    img_file = st.camera_input("Ambil Foto untuk Deteksi")
-    if img_file:
-        img = PIL.Image.open(img_file)
-        results = model.predict(img)
+elif mode == "Gunakan Kamera":
+    img_cam = st.camera_input("Ambil foto objek minuman")
+    if img_cam is not None:
+        image = Image.open(img_cam)
+        
+        results = model.predict(image, conf=0.25)
         res_plotted = results[0].plot()
-        st.image(res_plotted, caption="Hasil Deteksi Kamera")
+        
+        st.image(res_plotted, caption="Hasil Deteksi Kamera", use_container_width=True)
